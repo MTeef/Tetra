@@ -54,10 +54,7 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision):
    def compRanges(rngs, rngd, x, ph):
       xbar, lmid, rmid = midFromOut(i, 1, rngs, ph)
       xbar2, lmid2, rmid2 = midFromOut(i, 2, rngs, ph)
-      # print(rngs)
-      if i == 1 or i == 2:
-         # rngd = flip(rngd)
-         pass
+
       if xbar > x:
          if xbar2 > x:
            top =  rngs[2]
@@ -147,7 +144,7 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision):
       l3 = sqrt(l1**2 + l2**2 - 2*l1*l2*cos(th))
       return l3
 
-	# Mid-mid possible lengths for a candidate
+   # Mid-mid possible lengths for a candidate
    def fourLen(leftu, leftl, rightu, rightl, ph):
       uu = thirdLen(leftu, rightu, ph)
       ul = thirdLen(leftu, rightl, ph)
@@ -274,18 +271,4 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision):
    elapsed = time.time() - T
    nSol = t-1 # number of solutions
    return sol, nSol, elapsed
-
-## Testing
-# upper-upper, lower-lower test
-# sol, t, elapsed = tetraLen(4, 3.2, 3.1, 0.5054, 0.473, 0.39, .1)  # 8.07, 6.2, 7
-# # upper-lower, and lower-lower test
-# ph =  [0.40488196, 0.42390302, 0.63895181, 0.61449205, 0.91973653]
-# dst =  [10.44030651, 10.44030651, 10.77032961, 10.44030651, 15.]
-# sol, n, elTime = tetraLen(dst[0], dst[1], dst[2], ph[0], ph[1], ph[2], precision=0.1)
-# print(sol)
-# so, t, elapsed = tetraLen(3.2, 1.75, 2.9, 0.418, 0.3901, 0.2726, .1) # 6.8, 4.6, 4.3
-# so, t, elapsed = tetraLen(0.0186, 0.0711, 0.0734, 0.07355565873329885, 0.19451185271817809, 0.23053816270952635, .1)
-# print(so)
-# print(str(t) + " Solutions found!")
-# print("Elapsed Time: " + str(elapsed))
 
