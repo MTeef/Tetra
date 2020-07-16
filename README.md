@@ -1,5 +1,5 @@
 # Tetra
-Photos Positioning Algorithm
+Photo Positioning Algorithm
 
 # Alternatives
 - Collinearity Equation "Matrix-Based. 
