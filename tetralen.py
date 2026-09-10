@@ -199,41 +199,40 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
          if (b - a) < width_floor:
             break
       return (a + b) / 2.0
-
+      
    def golden_min(fL, fR, a, b, iters=100):
-      # Golden-section search for the h in [a, b] that minimizes
-      # |g(h)|. Used to pin down genuine tangential (double) roots:
-      # points where g grazes zero without ever changing sign, even
-      # under fine resampling.
-      gr = (sqrt(5.0) - 1.0) / 2.0
+    gr = (sqrt(5.0) - 1.0) / 2.0
 
-      def absg(h):
-         val, hl, hr = g_scalar(fL, fR, h)
-         if not isfinite(val):
+    def absg(h):
+        val, hl, hr = g_scalar(fL, fR, h)
+        if not isfinite(val):
             return np.inf, None, None
-         return abs(val), hl, hr
+        return abs(val), hl, hr
 
-      c = b - gr * (b - a)
-      d = a + gr * (b - a)
-      fc, _, _ = absg(c)
-      fd, _, _ = absg(d)
+    c = b - gr * (b - a)
+    d = a + gr * (b - a)
 
-      for _ in range(iters):
-         if (b - a) < 1e-14:
+    fc, _, _ = absg(c)
+    fd, _, _ = absg(d)
+
+    for _ in range(iters):
+        if (b - a) < 1e-14:
             break
-         if fc < fd:
+
+        if fc < fd:
             b, d, fd = d, c, fc
             c = b - gr * (b - a)
             fc, _, _ = absg(c)
-         else:
+        else:
             a, c, fc = c, d, fd
             d = a + gr * (b - a)
             fd, _, _ = absg(d)
 
-      hm = (a + b) / 2.0
-      fm, hl_m, hr_m = absg(hm)
-      return hm, fm, hl_m, hr_m
+    hm = (a + b) / 2.0
+    fm, hl_m, hr_m = absg(hm)
 
+    return hm, fm, hl_m, hr_m
+    
    def refine_window(fL, fR, fL_vec, fR_vec, a, b, sub=64):
       # A coarse sample can hide TWO close roots when the function
       # dips below (or rises above) zero and back between two
@@ -270,6 +269,13 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
       # genuine tangency (extremum sitting essentially on zero).
       hm, fm, hl_m, hr_m = golden_min(fL, fR, a, b)
       if isfinite(fm) and fm < tol:
+         print(
+        "TANGENCY:",
+        "a=", a,
+        "b=", b,
+        "hm=", hm,
+        "fm=", fm)
+    
          stats["tangent_roots"] += 1
          roots.append(hm)
 
@@ -357,8 +363,14 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
             continue
 
          turning = (b0 - a0) * (c0 - b0) < 0
-
          if not turning:
+            continue
+
+         # Only investigate a turning point if it is close enough to zero
+         # to plausibly contain a hidden root or tangency.
+         local_scale = max(abs(a0), abs(b0), abs(c0), x2, 1.0)
+
+         if abs(b0) > max(0.05 * local_scale, 100.0 * tol):
             continue
 
          stats["refine_windows"] += 1
