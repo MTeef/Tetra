@@ -23,12 +23,19 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
    dedup_radius = max(1e-6, tol)
 
    stats = {
-       "scan_points": 0,
-       "brackets": 0,
-       "exact_roots": 0,
-       "bisect_roots": 0,
-       "bisect_iterations": 0,
-       "g_calls": 0,
+      "scan_points": 0,
+      "brackets": 0,
+      "exact_roots": 0,
+      "bisect_roots": 0,
+      "bisect_iterations": 0,
+      "g_calls": 0,
+      "golden_time_ms": 0.0,
+      "bisect_time_ms": 0.0,
+      "refine_scan_time_ms": 0.0,
+      "golden_calls": 0,
+      "golden_iterations": 0,
+      "golden_g_calls": 0,
+"g_time_ms": 0.0,
    }
 
    def isoTri(x1, ph1):
@@ -52,31 +59,51 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
    # of rejecting for any overshoot this small; anything larger is a
    # genuinely infeasible triangle and still returns NaN.
    boundary_eps = 1e-9
-
+   sin_ph1 = sin(ph1)
+   cos_ph1 = cos(ph1)
+   sin_ph3 = sin(ph3)
+   cos_ph3 = cos(ph3)
+   cos_ph2 = cos(ph2)
+   
    def midUp(l, x, ph):
-      ath = l*sin(ph)/x
+      if ph == ph1:
+         s = sin_ph1
+         c = cos_ph1
+      else:
+         s = sin_ph3
+         c = cos_ph3
+
+      ath = l*s/x
       if ath > 1:
          if ath - 1 > boundary_eps:
             return np.nan
          ath = 1.0
-      th = arcsin(ath)
-      if pi-th > th:
-         th = pi-th
-      thu = th-ph
-      return l*sin(thu)/sin(th)
+      if ath < -1:
+         if -1 - ath > boundary_eps:
+            return np.nan
+         ath = -1.0
+
+      return l*c + x*sqrt(max(0.0, 1.0 - ath*ath))
 
    def midDown(l, x, ph):
-      ath = l*sin(ph)/x
+      if ph == ph1:
+         s = sin_ph1
+         c = cos_ph1
+      else:
+         s = sin_ph3
+         c = cos_ph3
+
+      ath = l*s/x
       if ath > 1:
          if ath - 1 > boundary_eps:
             return np.nan
          ath = 1.0
-      th = arcsin(ath)
-      if pi-th > th:
-         th = pi-th
-      thl = th+ph
-      return l*sin(thl)/sin(th)
+      if ath < -1:
+         if -1 - ath > boundary_eps:
+            return np.nan
+         ath = -1.0
 
+      return l*c - x*sqrt(max(0.0, 1.0 - ath*ath))
    def midUp_vec(l, x, ph):
       with np.errstate(divide='ignore', invalid='ignore'):
          ath = l*sin(ph)/x
@@ -120,8 +147,8 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
          return np.where(valid, out, np.nan)
 
    def thirdLen(l1, l2, th):
-      return sqrt(l1**2 + l2**2 - 2*l1*l2*cos(th))
-
+      return sqrt(l1**2 + l2**2 - 2*l1*l2*cos_ph2)
+      
    _, inl = riTri(x1, ph1)
    _, inr = riTri(x3, ph3)
    hm_max = min(inl, inr)
@@ -157,14 +184,16 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
    stats["scan_points"] = samples * len(branches)
 
    def g_scalar(fL, fR, h):
+      g_t0 = time.perf_counter()
       stats["g_calls"] += 1
 
       hl = fL(h, x1, ph1)
       hr = fR(h, x3, ph3)
 
       if not (isfinite(hl) and isfinite(hr)):
+         stats["g_time_ms"] += (time.perf_counter() - g_t0) * 1000.0
          return np.nan, None, None
-
+      stats["g_time_ms"] += (time.perf_counter() - g_t0) * 1000.0
       return thirdLen(hl, hr, ph2) - x2, hl, hr
 
    stats["tangent_roots"] = 0
@@ -183,6 +212,7 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
       # tight enough there, so converge h itself to (near) machine
       # precision -- 200 halvings is enormously more than needed and
       # simply stops making progress once a/b/m collide in float64.
+      bisect_t0 = time.perf_counter()
       h_scale = max(abs(a), abs(b), 1.0)
       width_floor = h_scale * 1e-14
 
@@ -198,12 +228,19 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
             b = m
          if (b - a) < width_floor:
             break
+        
+      stats["bisect_time_ms"] += (time.perf_counter() - bisect_t0) * 1000.0
       return (a + b) / 2.0
       
-   def golden_min(fL, fR, a, b, iters=100):
+   def golden_min(fL, fR, a, b, iters=80):
+
+    stats["golden_calls"] += 1
+    golden_t0 = time.perf_counter()
+    
     gr = (sqrt(5.0) - 1.0) / 2.0
 
     def absg(h):
+        stats["golden_g_calls"] += 1
         val, hl, hr = g_scalar(fL, fR, h)
         if not isfinite(val):
             return np.inf, None, None
@@ -216,6 +253,7 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
     fd, _, _ = absg(d)
 
     for _ in range(iters):
+        stats["golden_iterations"] += 1
         if (b - a) < 1e-14:
             break
 
@@ -230,7 +268,7 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
 
     hm = (a + b) / 2.0
     fm, hl_m, hr_m = absg(hm)
-
+    stats["golden_time_ms"] += (time.perf_counter() - golden_t0) * 1000.0
     return hm, fm, hl_m, hr_m
     
    def refine_window(fL, fR, fL_vec, fR_vec, a, b, sub=64):
@@ -241,6 +279,7 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
       # much more finely and re-run the ordinary crossing/exact test
       # on it, recursing one level if the finer grid still shows a
       # turning point that could itself be hiding a pair of roots.
+      refine_scan_t0 = time.perf_counter()
       roots = []
 
       hs_fine = np.linspace(a, b, sub)
