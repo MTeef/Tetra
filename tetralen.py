@@ -1,7 +1,19 @@
 import numpy as np
 from numpy import sin, cos, sqrt, arcsin, arccos, pi, isfinite, array, dot, clip, sort
+import math
 import time
 import random
+
+# Scalar hot-path math: Python's math module has much lower per-call
+# overhead than numpy's scalar ufuncs (no 0-d array wrapping/dispatch).
+# All vectorized (array) work below still uses numpy.
+msin, mcos, msqrt, masin = math.sin, math.cos, math.sqrt, math.asin
+misfinite = math.isfinite
+
+# Set True to re-enable full per-call timing breakdowns in stats
+# (adds real overhead: two perf_counter() calls per scalar evaluation).
+# Leave False for production/timing-critical use.
+PROFILE_DETAIL = False
 
 
 # Created by Mohammed Abdellateef
@@ -83,7 +95,7 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
             return np.nan
          ath = -1.0
 
-      return l*c + x*sqrt(max(0.0, 1.0 - ath*ath))
+      return l*c + x*msqrt(max(0.0, 1.0 - ath*ath))
 
    def midDown(l, x, ph):
       if ph == ph1:
@@ -103,7 +115,7 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
             return np.nan
          ath = -1.0
 
-      return l*c - x*sqrt(max(0.0, 1.0 - ath*ath))
+      return l*c - x*msqrt(max(0.0, 1.0 - ath*ath))
    def midUp_vec(l, x, ph):
       with np.errstate(divide='ignore', invalid='ignore'):
          ath = l*sin(ph)/x
@@ -148,6 +160,11 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
 
    def thirdLen(l1, l2, th):
       return sqrt(l1**2 + l2**2 - 2*l1*l2*cos_ph2)
+
+   def thirdLen_scalar(l1, l2):
+      # Scalar twin of thirdLen using math.sqrt (cheaper per-call than
+      # numpy's scalar sqrt); used only in scalar hot paths below.
+      return msqrt(l1*l1 + l2*l2 - 2*l1*l2*cos_ph2)
       
    _, inl = riTri(x1, ph1)
    _, inr = riTri(x3, ph3)
@@ -177,24 +194,40 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
    upper_samples = max(32, samples // 8)
    hs_upper = np.linspace(upper_start, hm_max, upper_samples)
 
-   hs = np.unique(np.concatenate((hs, hs_upper)))
+   # hs and hs_upper overlap in [upper_start, hm_max]. np.unique() used
+   # to merge+dedup them, but that forces a full sort of ~samples+
+   # upper_samples floats on every call for no reason: both arrays are
+   # already monotonic, so just drop the coarse points the dense upper
+   # samples supersede and concatenate -- still sorted, no sort needed.
+   hs = np.concatenate((hs[hs < upper_start], hs_upper))
    
    
    
    stats["scan_points"] = samples * len(branches)
 
-   def g_scalar(fL, fR, h):
-      g_t0 = time.perf_counter()
-      stats["g_calls"] += 1
+   if PROFILE_DETAIL:
+      def g_scalar(fL, fR, h):
+         g_t0 = time.perf_counter()
+         stats["g_calls"] += 1
 
-      hl = fL(h, x1, ph1)
-      hr = fR(h, x3, ph3)
+         hl = fL(h, x1, ph1)
+         hr = fR(h, x3, ph3)
 
-      if not (isfinite(hl) and isfinite(hr)):
+         if not (misfinite(hl) and misfinite(hr)):
+            stats["g_time_ms"] += (time.perf_counter() - g_t0) * 1000.0
+            return np.nan, None, None
          stats["g_time_ms"] += (time.perf_counter() - g_t0) * 1000.0
-         return np.nan, None, None
-      stats["g_time_ms"] += (time.perf_counter() - g_t0) * 1000.0
-      return thirdLen(hl, hr, ph2) - x2, hl, hr
+         return thirdLen_scalar(hl, hr) - x2, hl, hr
+   else:
+      def g_scalar(fL, fR, h):
+         stats["g_calls"] += 1
+
+         hl = fL(h, x1, ph1)
+         hr = fR(h, x3, ph3)
+
+         if not (misfinite(hl) and misfinite(hr)):
+            return np.nan, None, None
+         return thirdLen_scalar(hl, hr) - x2, hl, hr
 
    stats["tangent_roots"] = 0
    stats["refine_windows"] = 0
@@ -212,7 +245,7 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
       # tight enough there, so converge h itself to (near) machine
       # precision -- 200 halvings is enormously more than needed and
       # simply stops making progress once a/b/m collide in float64.
-      bisect_t0 = time.perf_counter()
+      bisect_t0 = time.perf_counter() if PROFILE_DETAIL else None
       h_scale = max(abs(a), abs(b), 1.0)
       width_floor = h_scale * 1e-14
 
@@ -220,7 +253,7 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
          stats["bisect_iterations"] += 1
          m = (a + b) / 2.0
          fm, _, _ = g_scalar(fL, fR, m)
-         if not isfinite(fm):
+         if not misfinite(fm):
             break
          if (fa < 0) == (fm < 0):
             a, fa = m, fm
@@ -228,22 +261,29 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
             b = m
          if (b - a) < width_floor:
             break
-        
-      stats["bisect_time_ms"] += (time.perf_counter() - bisect_t0) * 1000.0
+
+      if PROFILE_DETAIL:
+         stats["bisect_time_ms"] += (time.perf_counter() - bisect_t0) * 1000.0
       return (a + b) / 2.0
       
-   def golden_min(fL, fR, a, b, iters=80):
+   def golden_min(fL, fR, a, b, iters=45):
+    # 45 iterations of golden-section shrinks the bracket by
+    # 0.618^45 =~ 1.6e-10 relative to its starting width -- already
+    # far tighter than the 1e-9-scale boundary_eps/tol this solver
+    # works at. The old default of 80 pushed past float64's useful
+    # precision (0.618^80 ~ 1e-17) for no measurable benefit and
+    # ~1.8x the scalar evaluations.
 
     stats["golden_calls"] += 1
-    golden_t0 = time.perf_counter()
-    
-    gr = (sqrt(5.0) - 1.0) / 2.0
+    golden_t0 = time.perf_counter() if PROFILE_DETAIL else None
+
+    gr = (msqrt(5.0) - 1.0) / 2.0
 
     def absg(h):
         stats["golden_g_calls"] += 1
         val, hl, hr = g_scalar(fL, fR, h)
-        if not isfinite(val):
-            return np.inf, None, None
+        if not misfinite(val):
+            return math.inf, None, None
         return abs(val), hl, hr
 
     c = b - gr * (b - a)
@@ -268,7 +308,8 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
 
     hm = (a + b) / 2.0
     fm, hl_m, hr_m = absg(hm)
-    stats["golden_time_ms"] += (time.perf_counter() - golden_t0) * 1000.0
+    if PROFILE_DETAIL:
+       stats["golden_time_ms"] += (time.perf_counter() - golden_t0) * 1000.0
     return hm, fm, hl_m, hr_m
     
    def refine_window(fL, fR, fL_vec, fR_vec, a, b, sub=64):
@@ -308,13 +349,6 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
       # genuine tangency (extremum sitting essentially on zero).
       hm, fm, hl_m, hr_m = golden_min(fL, fR, a, b)
       if isfinite(fm) and fm < tol:
-         print(
-        "TANGENCY:",
-        "a=", a,
-        "b=", b,
-        "hm=", hm,
-        "fm=", fm)
-    
          stats["tangent_roots"] += 1
          roots.append(hm)
 
@@ -372,11 +406,21 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
       # whichever branch defines it, and repeated cases show the true
       # root often sits just inside that edge, dipping to zero and
       # partially recovering before hs[-1]. There is no hs[len(hs)]
-      # to complete a 3-point turning check there, so always refine
-      # that final interval directly (cheap: one more 64-point scan).
+      # to complete a 3-point turning check there, so refine that
+      # final interval directly when either endpoint is plausibly
+      # close to zero (cheap: one more 64-point scan).
+      #
+      # This used to run unconditionally on every branch, which meant
+      # an ~80-iteration scalar golden-section tangency search fired
+      # every solve even when nothing in that interval was anywhere
+      # near a root -- by far the single largest cost in profiling.
+      # Gated with the same "close enough to plausibly hide a root"
+      # threshold already used for interior turning points below.
       if len(hs) >= 2:
          a0, b0 = v_arr[-2], v_arr[-1]
-         if isfinite(a0) and isfinite(b0):
+         last_scale = max(abs(a0), abs(b0), x2, 1.0)
+         near_zero = min(abs(a0), abs(b0)) <= max(0.05 * last_scale, 100.0 * tol)
+         if isfinite(a0) and isfinite(b0) and near_zero:
             stats["refine_windows"] += 1
             for root in refine_window(
                 fL, fR, fL_vec, fR_vec, hs[-2], hs[-1]
@@ -394,23 +438,23 @@ def tetraLen(x1, x2, x3, ph1, ph2, ph3, precision, samples=250):
       # interval) or a genuine tangency. Any interior point that is a
       # local extremum of the coarse sample is a candidate for this;
       # re-examine that window at much higher resolution.
-      for i in range(1, len(v_arr) - 1):
+      #
+      # This used to be a pure-Python for loop over every one of the
+      # ~280 coarse sample points (numpy scalar indexing on each),
+      # when almost none of them are ever turning-point candidates.
+      # Do the "is this a candidate" test as one vectorized pass over
+      # the whole array, and only touch Python per actual candidate.
+      a_arr, b_arr, c_arr = v_arr[:-2], v_arr[1:-1], v_arr[2:]
+      valid3 = isfinite(a_arr) & isfinite(b_arr) & isfinite(c_arr)
+      turning_arr = (b_arr - a_arr) * (c_arr - b_arr) < 0
+      local_scale_arr = np.maximum.reduce(
+          [np.abs(a_arr), np.abs(b_arr), np.abs(c_arr),
+           np.full_like(b_arr, x2), np.full_like(b_arr, 1.0)]
+      )
+      near_zero_arr = np.abs(b_arr) <= np.maximum(0.05 * local_scale_arr, 100.0 * tol)
+      candidate_idx = np.nonzero(valid3 & turning_arr & near_zero_arr)[0] + 1
 
-         a0, b0, c0 = v_arr[i - 1], v_arr[i], v_arr[i + 1]
-
-         if not (isfinite(a0) and isfinite(b0) and isfinite(c0)):
-            continue
-
-         turning = (b0 - a0) * (c0 - b0) < 0
-         if not turning:
-            continue
-
-         # Only investigate a turning point if it is close enough to zero
-         # to plausibly contain a hidden root or tangency.
-         local_scale = max(abs(a0), abs(b0), abs(c0), x2, 1.0)
-
-         if abs(b0) > max(0.05 * local_scale, 100.0 * tol):
-            continue
+      for i in candidate_idx:
 
          stats["refine_windows"] += 1
 
