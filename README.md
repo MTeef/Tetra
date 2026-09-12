@@ -1,7 +1,7 @@
 
 # TetraLen
 
-A high-performance, robust Python geometric solver designed for tetrahedron missing-edge computations and Perspective-3-Point (P3P) camera pose estimation. 
+a derivative-free geometric P3P solver that achieves accuracy and robustness broadly comparable to established polynomial P3P solvers on several difficult configurations, including extreme-depth geometry, while currently trading substantially higher computation time for its numerical behavior.
 
 ## Overview
 
