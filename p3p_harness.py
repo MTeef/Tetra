@@ -481,6 +481,12 @@ def run_trial(config_name: str, solver_name: str, sigma: float, n_iters: int,
         for R_est, t_est in candidates:
             if not (np.all(np.isfinite(R_est)) and np.all(np.isfinite(t_est))):
                 continue
+            # Cheirality on the 3 points actually being solved, not just
+            # the held-out validation point below.
+            X_cam_est = (R_est @ X_world.T).T + t_est.reshape(1, 3)
+                    
+            if np.any(X_cam_est[:, 2] <= 0):
+                continue
             X_val_cam_est = R_est @ X_world_val + t_est
             if X_val_cam_est[2] <= 0:
                 continue
@@ -488,7 +494,7 @@ def run_trial(config_name: str, solver_name: str, sigma: float, n_iters: int,
             err = float(np.linalg.norm(proj_val - val_2d_clean))
             if err < best_err:
                 best_err, best_pose = err, (R_est, t_est)
-
+                
         if best_pose is None:
             summary.n_nonfinite += 1
             continue
